@@ -1,19 +1,17 @@
-#include <stdlib.h>
+#include "u94.h"
 #include <assert.h>
-#include <stdio.h>
-#include <string.h>
 
 #define FETCH_N(N) \
     assert(N <= 8); \
-	if(boff > N) { \
-		num = bytes[bnum] >> (boff - N); \
-		boff -= N; \
-	} \
-	else { \
-		num = ((bytes[bnum] & ((1 << boff) - 1)) << (N - boff)) | (bytes[bnum + 1] >> (8 + boff - N)); \
-		boff += 8 - N; \
-		++bnum; \
-	}
+    if(boff > N) { \
+        num = bytes[bnum] >> (boff - N); \
+        boff -= N; \
+    } \
+    else { \
+        num = ((bytes[bnum] & ((1 << boff) - 1)) << (N - boff)) | (bytes[bnum + 1] >> (8 + boff - N)); \
+        boff += 8 - N; \
+        ++bnum; \
+    }
 
 #define WRITE_N(N, X) \
     assert(N <= 8); \
@@ -31,24 +29,35 @@
 
 #define ENCODE_NEXT \
     FETCH_N(7) \
-	assert (num <= 0x80); \
-	if (num >= 0x20 || num == '\n' || num == '\r') { \
-		*out++ = num; \
-	} \
-	else { \
+    assert (num <= 0x80); \
+    if (num >= 0x20 || num == '\n' || num == '\r') { \
+        *out++ = num; \
+    } \
+    else { \
         assert(num != '\r'); \
         assert(num != '\n'); \
         if (num < '\n') ++num; \
         if (num < '\r') ++num; \
-    	assert(num < 0x20); \
-		assert(num >= 2); \
-		*out++ = num | 0b11000000; \
-		FETCH_N(6) \
-		*out++ = num | 0b10000000; \
-	}
+        assert(num < 0x20); \
+        assert(num >= 2); \
+        *out++ = num | 0b11000000; \
+        FETCH_N(6) \
+        *out++ = num | 0b10000000; \
+    }
 
-// TODO: check it's the beginning of a 2-byte sequence
-// TODO: check invalid UTF-8
+/*
+ * Don't validate 1-byte sequences:
+ * if (*pos < 0x20 && *pos != '\r' && *pos != '\n') return 0;
+ * Costs about 15% decoding performance and does not make the
+ * decoder vulnerable to untrusted input.
+ * Just decodes some additional sequences that can not occur
+ * in properly encoded u94. */
+
+/* The if check in the 2-byte-sequence case:
+ * It does not seem to have a large impact on performance. The
+ * (pos + 1 >= end) part is needed for completely untrusted
+ * input. If the caller makes sure that the input is valid UTF-8,
+ * then it is not needed. */
 
 #define DECODE_NEXT(N7, N6) \
     assert(N7 > 0); \
@@ -58,7 +67,8 @@
         ++pos; \
     } \
     else { \
-        assert(pos + 1 < end); \
+        if (pos + 1 >= end || (*pos & 0xe0) != 0xc0 || (*pos & 0b00011110) == 0) \
+            return 0; \
         unsigned int num = (*pos) & 0x1f; \
         unsigned int num2 = (*(pos+1)) & 0x3f; \
         assert(num >= 2); \
@@ -76,11 +86,16 @@
         pos += 2; \
     }
 
+/* TODO: streaming interface */
+
+/* The decoder can be called with untrusted input.
+ * It returns 0 if the byte sequence is not correctly
+ * encoded u94 or invalid UTF-8. */
+
 size_t u94dec(unsigned char* out, size_t outlen, const unsigned char* bytes, size_t len)
 {
     assert(outlen >= 2);
 
-    const unsigned char* orig_out = out;
     const unsigned char* end = bytes + len;
     const unsigned char* pos = bytes;
 
@@ -119,11 +134,11 @@ size_t u94enc(unsigned char* out, size_t outlen, const unsigned char* bytes, siz
     assert(len >= 2);
 
     const unsigned char* const orig_out = out;
-	unsigned int bnum = 0;
-	unsigned int boff = 8;
+    unsigned int bnum = 0;
+    unsigned int boff = 8;
     unsigned int num;
 
-	while (bnum < len - 2) {
+    while (bnum < len - 2) {
         ENCODE_NEXT
     }
 
@@ -137,36 +152,3 @@ size_t u94enc(unsigned char* out, size_t outlen, const unsigned char* bytes, siz
 
     return out - orig_out;
 }
-
-#define BUFZ 315
-
-int main()
-{
-    unsigned char* c = malloc(BUFZ);
-    for (int i = 0; i < BUFZ; ++i)
-        c[i] = i % 256;
-
-    unsigned char* out = malloc(BUFZ * 2);
-    size_t outlen = BUFZ * 2;
-
-    size_t outsize = u94enc(out, outlen, c, BUFZ);
-    printf("%lu\n", outsize);
-
-    for(int i = 0; i < outsize; ++i) {
-        printf("%d: %d\n", i, (int)out[i]);
-    }
-
-    unsigned char* x = malloc(BUFZ + 100);
-    memset(x, 0, BUFZ + 100);
-    int dec = u94dec(x, BUFZ, out, outsize);
-    printf("decoded: %d\n", (int)dec);
-    
-    for(int i = 0; i < BUFZ; ++i) {
-        printf("%d: %d\n", i, (int)x[i]);
-    }
-
-    printf("%.*s\n", (int)outsize, out);
-}
-
-/* TODO: test that with only 0-bytes we get a 13:16 factor */
-/* TODO: test that for random data we get the 98*7/8 + 30*13/16 factor */
