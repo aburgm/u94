@@ -13,6 +13,11 @@
         ++bnum; \
     }
 
+// TODO: valgrind u94test.c to make sure
+// For >= to avoid writing into the next byte:
+//        bnum += (boff == 0);
+//        boff = ((boff + 7) % 8) + 1;
+
 #define WRITE_N(N, X) \
     assert(N <= 8); \
     assert(X < (1 << N)); \
@@ -27,8 +32,15 @@
         ++bnum; \
     }
 
-#define ENCODE_NEXT \
-    FETCH_N(7) \
+/*
+ * Note that in case N6 == 0, it doesn't matter
+ * what we are padding the 6 bits with, so just
+ * re-use `num`...
+ */
+
+#define ENCODE_NEXT(N7, N6) \
+    assert(N7 > 0); \
+    FETCH_N(N7) \
     assert (num <= 0x80); \
     if (num >= 0x20 || num == '\n' || num == '\r') { \
         *out++ = num; \
@@ -41,7 +53,9 @@
         assert(num < 0x20); \
         assert(num >= 2); \
         *out++ = num | 0b11000000; \
-        FETCH_N(6) \
+        if (N6 > 0) { \
+          FETCH_N(N6) \
+        } \
         *out++ = num | 0b10000000; \
     }
 
@@ -62,7 +76,7 @@
 #define DECODE_NEXT(N7, N6) \
     assert(N7 > 0); \
     if ((*pos & 0x80) == 0) { \
-        unsigned int num = *pos >> (7 - N7); \
+        unsigned int num = *pos; \
         WRITE_N(N7, num); \
         ++pos; \
     } \
@@ -77,13 +91,20 @@
         assert(num != '\r'); \
         assert(num != '\n'); \
         assert(num < 0x20); \
-        num >>= 7 - N7; \
-        num2 >>= 6 - N6; \
         WRITE_N(N7, num); \
         if(N6 > 0) { \
             WRITE_N(N6, num2); \
         } \
         pos += 2; \
+    }
+
+#define GET_N7N6(len) \
+    unsigned int N7 = boff + 8*(len - bnum - 1); \
+    unsigned int N6 = 0; \
+    if (N7 > 7) { \
+        N6 = N7 - 7; \
+        N7 = 7; \
+        if (N6 > 6) N6 = 6; \
     }
 
 /* TODO: streaming interface */
@@ -94,8 +115,6 @@
 
 size_t u94dec(unsigned char* out, size_t outlen, const unsigned char* bytes, size_t len)
 {
-    assert(outlen >= 2);
-
     const unsigned char* end = bytes + len;
     const unsigned char* pos = bytes;
 
@@ -105,49 +124,39 @@ size_t u94dec(unsigned char* out, size_t outlen, const unsigned char* bytes, siz
     /* outlen must be known for this to work. Can't reliably
      * detect end of stream otherwise... */
 
-    while (bnum < outlen - 2 && pos != end) {
-        DECODE_NEXT(7, 6)
+    if (outlen > 2) {
+        while (bnum < outlen - 2 && pos != end) {
+            DECODE_NEXT(7, 6)
+        }
     }
 
     while (bnum < outlen && pos != end) {
-        unsigned int N7 = boff + 8*(outlen - bnum - 1);
-        unsigned int N6 = 0;
-
-        if (N7 > 7) {
-            N6 = N7 - 7;
-            N7 = 7;
-            if (N6 > 6) N6 = 6;
-        }
-
+        GET_N7N6(outlen)
         DECODE_NEXT(N7, N6)
     }
 
-    assert(pos == end);
-    assert(bnum == outlen);
-    assert(boff == 8);
+    // Both streams should end at the same time or we got not properly encoded input data
+    if (pos != end || bnum != outlen || boff != 8)
+        return 0;
 
     return bnum;
 }
 
 size_t u94enc(unsigned char* out, size_t outlen, const unsigned char* bytes, size_t len)
 {
-    assert(len >= 2);
-
     const unsigned char* const orig_out = out;
     unsigned int bnum = 0;
     unsigned int boff = 8;
     unsigned int num;
 
-    while (bnum < len - 2) {
-        ENCODE_NEXT
+    if (len > 2) {
+        while (bnum < len - 2) {
+            ENCODE_NEXT(7, 6)
+        }
     }
-
-    const unsigned char last[4] = { bytes[len - 2], bytes[len - 1], 0, 0 };
-
-    bnum -= (len - 2);
-    bytes = last;
-    while (bnum < 2) {
-        ENCODE_NEXT
+    while (bnum < len) {
+        GET_N7N6(len)
+        ENCODE_NEXT(N7, N6);
     }
 
     return out - orig_out;
