@@ -5,9 +5,10 @@
 
 #define FETCH_N(N) \
     assert(N <= 8); \
-    if(boff > N) { \
+    if(boff >= N) { \
         num = (bytes[bnum] >> (boff - N)) & ((1 << N) - 1); \
-        boff -= N; \
+        boff = ((boff - N + 7) % 8) + 1; \
+        bnum += (boff == 8); \
     } \
     else { \
         num = ((bytes[bnum] << (N - boff)) & ((1 << N) - 1)) | (bytes[bnum + 1] >> (8 + boff - N)); \
@@ -15,17 +16,13 @@
         ++bnum; \
     }
 
-// TODO: valgrind u94test.c to make sure
-// For >= to avoid writing into the next byte:
-//        bnum += (boff == 0);
-//        boff = ((boff + 7) % 8) + 1;
-
 #define WRITE_N(N, X) \
     assert(N <= 8); \
     assert(X < (1 << N)); \
-    if (boff > N) { \
+    if (boff >= N) { \
         out[bnum] = (out[bnum] & ~((1 << boff) - 1)) | (X << (boff - N)); \
-        boff -= N; \
+        boff = ((boff - N + 7) % 8) + 1; \
+        bnum += (boff == 8); \
     } \
     else { \
         out[bnum] = (out[bnum] & ~((1 << boff) - 1)) | (X >> (N - boff)); \
@@ -45,9 +42,11 @@
     FETCH_N(N7) \
     assert (num < 0x80); \
     if (num >= 0x20 && num != '\"' && num != '\\') { \
+	++A1; \
         *out++ = num; \
     } \
     else if (num < 30) { \
+	++A2; \
         num += 2; \
         *out++ = num | 0b11000000; \
         if (M6 > 0) { \
@@ -56,13 +55,14 @@
         *out++ = num | 0b10000000; \
     } \
     else { \
+      ++A3; \
       unsigned int prenum; \
       switch (num) { \
       case 30: prenum = 0b11100010; break; \
       case 31: prenum = 0b11100110; break; \
       case '\"': prenum = 0b11101010; break; \
       case '\\': prenum = 0b11101110; break; \
-      default: assert(false); break; \
+      default: assert(0); break; \
       } \
       if (M6 > 0) { \
         FETCH_N((M6 + O1)); \
@@ -121,7 +121,7 @@
         case 1: num = 31; break; \
         case 2: num = '\"'; break; \
         case 3: num = '\\'; break; \
-        default: assert(false); break; \
+        default: assert(0); break; \
         } \
         WRITE_N(N7, num) \
         if (M6 > 0) { \
@@ -177,6 +177,7 @@ size_t u94dec(unsigned char* out, size_t outlen, const unsigned char* bytes, siz
 
 size_t u94enc(unsigned char* out, size_t outlen, const unsigned char* bytes, size_t len)
 {
+    unsigned int A1 = 0, A2 = 0, A3 = 0;
     const unsigned char* const orig_out = out;
     unsigned int bnum = 0;
     unsigned int boff = 8;
