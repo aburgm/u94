@@ -1,17 +1,20 @@
 #include "u94.h"
 #include <assert.h>
 
+#define MIN(A,B) ((A) < (B) ? (A) : (B))
+
 #define FETCH_N(N) \
     assert(N <= 8); \
     if(boff > N) { \
-        num = bytes[bnum] >> (boff - N); \
+        num = (bytes[bnum] >> (boff - N)) & ((1 << N) - 1); \
         boff -= N; \
     } \
     else { \
-        num = ((bytes[bnum] & ((1 << boff) - 1)) << (N - boff)) | (bytes[bnum + 1] >> (8 + boff - N)); \
+        num = ((bytes[bnum] << (N - boff)) & ((1 << N) - 1)) | (bytes[bnum + 1] >> (8 + boff - N)); \
         boff += 8 - N; \
         ++bnum; \
     }
+//        num = ((bytes[bnum] & ((1 << boff) - 1)) << (N - boff)) | (bytes[bnum + 1] >> (8 + boff - N)); \
 
 // TODO: valgrind u94test.c to make sure
 // For >= to avoid writing into the next byte:
@@ -38,25 +41,39 @@
  * re-use `num`...
  */
 
-#define ENCODE_NEXT(N7, N6) \
+#define ENCODE_NEXT(N7, M6, O1, P6) \
     assert(N7 > 0); \
     FETCH_N(N7) \
-    assert (num <= 0x80); \
-    if (num >= 0x20 || num == '\n' || num == '\r') { \
+    assert (num < 0x80); \
+    if (num >= 0x20 && num != '\"' && num != '\\') { \
         *out++ = num; \
     } \
-    else { \
-        assert(num != '\r'); \
-        assert(num != '\n'); \
-        if (num < '\n') ++num; \
-        if (num < '\r') ++num; \
-        assert(num < 0x20); \
-        assert(num >= 2); \
+    else if (num < 30) { \
+        num += 2; \
         *out++ = num | 0b11000000; \
-        if (N6 > 0) { \
-          FETCH_N(N6) \
+        if (M6 > 0) { \
+          FETCH_N(M6) \
         } \
         *out++ = num | 0b10000000; \
+    } \
+    else { \
+      unsigned int prenum; \
+      switch (num) { \
+      case 30: prenum = 0b11100010; break; \
+      case 31: prenum = 0b11100110; break; \
+      case '\"': prenum = 0b11101010; break; \
+      case '\\': prenum = 0b11101110; break; \
+      default: assert(false); break; \
+      } \
+      if (M6 > 0) { \
+        FETCH_N((M6 + O1)); \
+      } \
+      *out++ = prenum | (num >> 6); \
+      *out++ = 0b10000000 | (num & 0b00111111); \
+      if (P6 > 0) { \
+        FETCH_N(P6) \
+      } \
+      *out++ = 0b10000000 | (num & 0b00111111); \
     }
 
 /*
@@ -107,6 +124,13 @@
         if (N6 > 6) N6 = 6; \
     }
 
+#define GET_N7M6O1P6(len) \
+    unsigned int rem = boff + 8*(len - bnum - 1); \
+    unsigned int N7 = MIN(rem, 7); \
+    unsigned int M6 = MIN(rem - MIN(7, rem), 6); \
+    unsigned int O1 = MIN(rem - MIN(13, rem), 1); \
+    unsigned int P6 = MIN(rem - MIN(14, rem), 6);
+
 /* TODO: streaming interface */
 
 /* The decoder can be called with untrusted input.
@@ -149,14 +173,14 @@ size_t u94enc(unsigned char* out, size_t outlen, const unsigned char* bytes, siz
     unsigned int boff = 8;
     unsigned int num;
 
-    if (len > 2) {
-        while (bnum < len - 2) {
-            ENCODE_NEXT(7, 6)
+    if (len > 3) {
+        while (bnum < len - 3) {
+            ENCODE_NEXT(7, 6, 1, 6)
         }
     }
     while (bnum < len) {
-        GET_N7N6(len)
-        ENCODE_NEXT(N7, N6);
+        GET_N7M6O1P6(len)
+        ENCODE_NEXT(N7, M6, O1, P6)
     }
 
     return out - orig_out;
