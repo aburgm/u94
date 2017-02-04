@@ -50,7 +50,7 @@ u94_encode(PyObject* self, PyObject* args)
         return NULL;
 
     /* worst case: */
-    output_len = input_len * 16 / 13 + 2;
+    output_len = input_len * 16 / 13 + 3;
 
     result = PyBytes_FromStringAndSize(NULL, output_len);
     if (!result)
