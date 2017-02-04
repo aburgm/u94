@@ -42,11 +42,11 @@
     FETCH_N(N7) \
     assert (num < 0x80); \
     if (num >= 0x20 && num != '\"' && num != '\\') { \
-	++A1; \
         *out++ = num; \
     } \
     else if (num < 30) { \
-	++A2; \
+        if (out + 1 >= end) \
+            return 0; \
         num += 2; \
         *out++ = num | 0b11000000; \
         if (M6 > 0) { \
@@ -55,7 +55,8 @@
         *out++ = num | 0b10000000; \
     } \
     else { \
-      ++A3; \
+        if (out + 2 >= end) \
+            return 0; \
       unsigned int prenum; \
       switch (num) { \
       case 30: prenum = 0b11100010; break; \
@@ -177,21 +178,22 @@ size_t u94dec(unsigned char* out, size_t outlen, const unsigned char* bytes, siz
 
 size_t u94enc(unsigned char* out, size_t outlen, const unsigned char* bytes, size_t len)
 {
-    unsigned int A1 = 0, A2 = 0, A3 = 0;
-    const unsigned char* const orig_out = out;
+    const unsigned char* const end = out + outlen;
+    const unsigned char* const beg = out;
+
     unsigned int bnum = 0;
     unsigned int boff = 8;
     unsigned int num;
 
     if (len > 3) {
-        while (bnum < len - 3) {
+        while (bnum < len - 3 && out != end) {
             ENCODE_NEXT(7, 6, 1, 6)
         }
     }
-    while (bnum < len) {
+    while (bnum < len && out != end) {
         GET_N7M6O1P6(len)
         ENCODE_NEXT(N7, M6, O1, P6)
     }
 
-    return out - orig_out;
+    return out - beg;
 }
